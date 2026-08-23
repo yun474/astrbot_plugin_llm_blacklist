@@ -4,7 +4,7 @@ import asyncio
 import math
 import time
 
-from astrbot.api import logger
+from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import At
 from astrbot.api.provider import ProviderRequest
@@ -15,21 +15,26 @@ from .blacklist_state import (
     BlacklistState,
     format_end_time,
     format_remaining,
+    render_blocked_message,
 )
 
 PLUGIN_NAME = "astrbot_plugin_llm_blacklist"
 STATE_KEY = "temporary_blacklist"
+DEFAULT_BLOCKED_MESSAGE_TEMPLATE = (
+    "你在当前对话中仍处于临时拉黑状态，剩余 {remaining_time}。发送 /拉黑 可查看详情。"
+)
 
 
 @register(
     PLUGIN_NAME,
     "yun474",
     "由 LLM 自主决定时长的会话临时黑名单",
-    "0.1.0",
+    "0.1.1",
 )
 class LLMBlacklistPlugin(Star):
-    def __init__(self, context: Context) -> None:
+    def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
+        self.config = config
         self._state = BlacklistState()
         self._state_loaded = False
         self._state_lock = asyncio.Lock()
@@ -114,13 +119,16 @@ class LLMBlacklistPlugin(Star):
             return
 
         event.stop_event()
-        await event.send(
-            event.plain_result(
-                "你在当前对话中仍处于临时拉黑状态，"
-                f"剩余 {format_remaining(entry.expires_at - now)}。"
-                "发送 /拉黑 可查看详情。"
+        if self.config.get("show_blocked_message", True):
+            template = str(
+                self.config.get(
+                    "blocked_message_template",
+                    DEFAULT_BLOCKED_MESSAGE_TEMPLATE,
+                )
             )
-        )
+            message = render_blocked_message(template, entry.expires_at - now)
+            if message:
+                await event.send(event.plain_result(message))
         logger.info(
             "已拦截用户 %s 在会话 %s 的 LLM 请求，解禁时间 %s。",
             user_id,

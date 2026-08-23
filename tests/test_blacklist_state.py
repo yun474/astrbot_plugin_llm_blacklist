@@ -4,6 +4,7 @@ from blacklist_state import (
     BlacklistEntry,
     BlacklistState,
     format_remaining,
+    render_blocked_message,
 )
 
 
@@ -88,6 +89,14 @@ class BlacklistStateTest(unittest.TestCase):
         self.assertEqual(format_remaining(0.1), "1秒")
         self.assertEqual(format_remaining(3661), "1小时1分钟1秒")
         self.assertEqual(format_remaining(90060), "1天1小时1分钟")
+
+    def test_blocked_message_replaces_remaining_time_placeholder(self) -> None:
+        message = render_blocked_message(
+            "你还要等 {remaining_time}，{unknown} 保持原样。",
+            61,
+        )
+
+        self.assertEqual(message, "你还要等 1分钟1秒，{unknown} 保持原样。")
 
 
 if __name__ == "__main__":

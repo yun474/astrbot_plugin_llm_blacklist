@@ -1,0 +1,14 @@
+{
+  "show_blocked_message": {
+    "description": "被拉黑用户再次唤醒 LLM 时发送提示",
+    "type": "bool",
+    "hint": "关闭后仍会拦截 LLM 请求，但不会向用户发送提示消息。",
+    "default": true
+  },
+  "blocked_message_template": {
+    "description": "被拉黑用户再次唤醒 LLM 时的提示内容",
+    "type": "text",
+    "hint": "使用 {remaining_time} 占位符显示实时剩余时间。",
+    "default": "你在当前对话中仍处于临时拉黑状态，剩余 {remaining_time}。发送 /拉黑 可查看详情。"
+  }
+}

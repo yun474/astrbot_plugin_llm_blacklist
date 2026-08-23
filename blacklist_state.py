@@ -139,3 +139,12 @@ def format_end_time(timestamp: float) -> str:
     return (
         datetime.fromtimestamp(timestamp).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
     )
+
+
+def render_blocked_message(template: str, remaining_seconds: float) -> str:
+    """替换拉黑提示模板中的剩余时间占位符。"""
+
+    return template.replace(
+        "{remaining_time}",
+        format_remaining(remaining_seconds),
+    )
