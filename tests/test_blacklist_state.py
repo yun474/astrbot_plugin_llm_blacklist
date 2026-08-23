@@ -29,6 +29,26 @@ class BlacklistStateTest(unittest.TestCase):
         self.assertEqual(entry.expires_at if entry else None, 500.0)
         self.assertEqual(len(state.entries_for("dialog", 100.0)), 1)
 
+    def test_remove_only_releases_user_from_selected_conversation(self) -> None:
+        state = BlacklistState()
+        state.add("dialog-a", BlacklistEntry("openid_1", "甲", 200.0))
+        state.add("dialog-b", BlacklistEntry("openid_1", "甲", 300.0))
+
+        removed = state.remove("dialog-a", "openid_1")
+
+        self.assertEqual(removed.user_id if removed else None, "openid_1")
+        self.assertIsNone(state.get("dialog-a", "openid_1", 100.0))
+        self.assertIsNotNone(state.get("dialog-b", "openid_1", 100.0))
+
+    def test_remove_unknown_user_does_not_change_state(self) -> None:
+        state = BlacklistState()
+        state.add("dialog", BlacklistEntry("1", "甲", 200.0))
+
+        removed = state.remove("dialog", "2")
+
+        self.assertIsNone(removed)
+        self.assertIsNotNone(state.get("dialog", "1", 100.0))
+
     def test_loading_discards_expired_and_invalid_records(self) -> None:
         raw = {
             "dialog": {

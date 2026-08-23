@@ -67,6 +67,16 @@ class BlacklistState:
         users = self._conversations.setdefault(conversation_id, {})
         users[entry.user_id] = entry
 
+    def remove(self, conversation_id: str, user_id: str) -> BlacklistEntry | None:
+        users = self._conversations.get(conversation_id)
+        if not users:
+            return None
+
+        entry = users.pop(user_id, None)
+        if not users:
+            del self._conversations[conversation_id]
+        return entry
+
     def get(
         self, conversation_id: str, user_id: str, now: float
     ) -> BlacklistEntry | None:

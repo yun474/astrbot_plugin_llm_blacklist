@@ -6,6 +6,7 @@ import time
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.message_components import At
 from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, register
 
@@ -66,6 +67,17 @@ class LLMBlacklistPlugin(Star):
     def _sender_name(event: AstrMessageEvent, user_id: str) -> str:
         name = " ".join(event.get_sender_name().split())
         return name[:64] or user_id
+
+    @staticmethod
+    def _mentioned_user_id(event: AstrMessageEvent) -> str:
+        bot_id = str(event.get_self_id() or "")
+        for component in event.get_messages():
+            if not isinstance(component, At):
+                continue
+            user_id = str(component.qq).strip()
+            if user_id and user_id != "all" and user_id != bot_id:
+                return user_id
+        return ""
 
     @staticmethod
     def _format_entry(index: int, entry: BlacklistEntry, now: float) -> str:
@@ -218,6 +230,38 @@ class LLMBlacklistPlugin(Star):
                 for index, entry in enumerate(entries, start=1)
             )
         yield event.plain_result("\n".join(lines))
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("出狱")
+    async def release_user(self, event: AstrMessageEvent):
+        """解除被艾特用户在当前对话中的临时拉黑，仅限 AstrBot 管理员。"""
+
+        user_id = self._mentioned_user_id(event)
+        if not user_id:
+            yield event.plain_result("请艾特需要解除拉黑的用户，例如：/出狱 @用户")
+            return
+
+        now = time.time()
+        conversation_id = event.unified_msg_origin
+        async with self._state_lock:
+            await self._ensure_state_loaded()
+            changed = self._state.remove_expired(now)
+            entry = self._state.remove(conversation_id, user_id)
+            if changed or entry is not None:
+                await self._save_state()
+
+        if entry is None:
+            yield event.plain_result(f"用户 {user_id} 当前不在这个对话的临时黑名单中。")
+            return
+
+        logger.info(
+            "管理员已将用户 %s 移出会话 %s 的临时黑名单。",
+            user_id,
+            conversation_id,
+        )
+        yield event.plain_result(
+            f"已解除 {entry.user_name}（{entry.user_id}）在当前对话中的拉黑状态。"
+        )
 
     async def terminate(self) -> None:
         logger.info("LLM 会话临时黑名单插件已卸载。")
