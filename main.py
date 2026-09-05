@@ -13,6 +13,7 @@ from astrbot.api.star import Context, Star, register
 from .blacklist_state import (
     BlacklistEntry,
     BlacklistState,
+    extract_official_mention_ids,
     format_end_time,
     format_remaining,
     render_blocked_message,
@@ -81,6 +82,10 @@ class LLMBlacklistPlugin(Star):
                 continue
             user_id = str(component.qq).strip()
             if user_id and user_id != "all" and user_id != bot_id:
+                return user_id
+
+        for user_id in extract_official_mention_ids(event.get_message_str()):
+            if user_id != bot_id:
                 return user_id
         return ""
 

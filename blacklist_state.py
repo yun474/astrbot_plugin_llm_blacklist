@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+
+OFFICIAL_MENTION_PATTERN = re.compile(r"<@!?([^<>\s]+)>")
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,3 +151,9 @@ def render_blocked_message(template: str, remaining_seconds: float) -> str:
         "{remaining_time}",
         format_remaining(remaining_seconds),
     )
+
+
+def extract_official_mention_ids(message: str) -> list[str]:
+    """提取官方机器人文本格式中的艾特用户 ID。"""
+
+    return OFFICIAL_MENTION_PATTERN.findall(message)

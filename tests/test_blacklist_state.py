@@ -3,6 +3,7 @@ import unittest
 from blacklist_state import (
     BlacklistEntry,
     BlacklistState,
+    extract_official_mention_ids,
     format_remaining,
     render_blocked_message,
 )
@@ -97,6 +98,17 @@ class BlacklistStateTest(unittest.TestCase):
         )
 
         self.assertEqual(message, "你还要等 1分钟1秒，{unknown} 保持原样。")
+
+    def test_extracts_both_official_mention_formats(self) -> None:
+        message = "/出狱 <@openid_plain> <@!openid_with_bang>"
+
+        self.assertEqual(
+            extract_official_mention_ids(message),
+            ["openid_plain", "openid_with_bang"],
+        )
+
+    def test_does_not_treat_bare_id_as_official_mention(self) -> None:
+        self.assertEqual(extract_official_mention_ids("/出狱 openid_plain"), [])
 
 
 if __name__ == "__main__":
