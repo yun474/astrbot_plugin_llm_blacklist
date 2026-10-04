@@ -21,6 +21,7 @@ from .blacklist_state import (
 
 PLUGIN_NAME = "astrbot_plugin_llm_blacklist"
 STATE_KEY = "temporary_blacklist"
+MAX_LIST_LENGTH = 1800
 DEFAULT_BLOCKED_MESSAGE_TEMPLATE = (
     "你在当前对话中仍处于临时拉黑状态，剩余 {remaining_time}。发送 /拉黑 可查看详情。"
 )
@@ -30,7 +31,7 @@ DEFAULT_BLOCKED_MESSAGE_TEMPLATE = (
     PLUGIN_NAME,
     "yun474",
     "由 LLM 自主决定时长的会话临时黑名单",
-    "0.1.1",
+    "0.1.2",
 )
 class LLMBlacklistPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
@@ -51,15 +52,17 @@ class LLMBlacklistPlugin(Star):
 
         raw = await self.get_kv_data(STATE_KEY, {})
         now = time.time()
-        self._state = BlacklistState.from_dict(raw, now)
-        self._state_loaded = True
+        state = BlacklistState.from_dict(raw, now)
 
-        normalized = self._state.to_dict()
+        normalized = state.to_dict()
         if raw != normalized:
             await self.put_kv_data(STATE_KEY, normalized)
+        self._state = state
+        self._state_loaded = True
 
-    async def _save_state(self) -> None:
-        await self.put_kv_data(STATE_KEY, self._state.to_dict())
+    async def _save_state(self, state: BlacklistState) -> None:
+        await self.put_kv_data(STATE_KEY, state.to_dict())
+        self._state = state
 
     @staticmethod
     def _sender_id(event: AstrMessageEvent) -> str:
@@ -98,6 +101,26 @@ class LLMBlacklistPlugin(Star):
             f"   剩余 {remaining}，解禁时间 {end_time}"
         )
 
+    def _format_list(
+        self, header: str, conversations: dict[str, list[BlacklistEntry]], now: float
+    ) -> str:
+        total = sum(len(entries) for entries in conversations.values())
+        suffix = "\n…名单过长，已截断，另有 {} 条未展示。"
+        budget = MAX_LIST_LENGTH - len(suffix.format(total))
+        message = header
+        shown = 0
+        for conversation_id, entries in conversations.items():
+            for index, entry in enumerate(entries, start=1):
+                section = (
+                    f"\n\n[{conversation_id}]" if conversation_id and index == 1 else ""
+                )
+                part = section + "\n" + self._format_entry(index, entry, now)
+                if len(message) + len(part) > budget:
+                    return message + suffix.format(total - shown)
+                message += part
+                shown += 1
+        return message
+
     @filter.on_llm_request()
     async def block_blacklisted_request(
         self, event: AstrMessageEvent, _request: ProviderRequest
@@ -115,10 +138,11 @@ class LLMBlacklistPlugin(Star):
         conversation_id = event.unified_msg_origin
         async with self._state_lock:
             await self._ensure_state_loaded()
-            changed = self._state.remove_expired(now)
-            entry = self._state.get(conversation_id, user_id, now)
+            state = self._state.copy()
+            changed = state.remove_expired(now)
+            entry = state.get(conversation_id, user_id, now)
             if changed:
-                await self._save_state()
+                await self._save_state(state)
 
         if entry is None:
             return
@@ -143,44 +167,72 @@ class LLMBlacklistPlugin(Star):
 
     @filter.llm_tool(name="add_dialog_temporary_blacklist")
     async def add_dialog_temporary_blacklist(
-        self, event: AstrMessageEvent, duration_minutes: float | None = None
+        self,
+        event: AstrMessageEvent,
+        duration_minutes: float | None = None,
+        openid: str | None = None,
     ) -> str:
-        """将当前消息发送者加入当前对话的临时黑名单。管理员不会被拉黑；拉黑时长由你根据当前对话情况自主决定。
+        """将指定用户加入当前对话的临时黑名单。管理员不会被拉黑；拉黑时长由你自主决定。
 
         Args:
             duration_minutes(number): 拉黑分钟数，必须大于 0，具体数值由你自主决定。
+            openid(string): 目标用户的真实 openid 或用户 ID。
+                必须来自可确认的身份信息，不要猜测。省略时使用当前消息发送者；
+                只填原始 ID，不要带 @ 或 <@...>。
         """
 
-        if event.is_admin():
-            return "拉黑失败：当前消息发送者是 AstrBot 管理员。"
+        sender_id = self._sender_id(event)
+        if openid is None:
+            user_id = sender_id
+        elif not isinstance(openid, str) or not openid.strip():
+            return "拉黑失败：openid 必须是非空字符串。"
+        else:
+            user_id = openid.strip()
+            if any(char.isspace() or char in "<>@" for char in user_id):
+                return "拉黑失败：openid 只填写原始用户 ID，不要带艾特格式或空白。"
+        if not user_id:
+            return "拉黑失败：无法取得当前消息发送者 ID，请传入 openid。"
+        if user_id == "all" or user_id == str(event.get_self_id()):
+            return "拉黑失败：不能拉黑机器人自身或全体成员。"
+
+        admins = self.context.get_config(event.unified_msg_origin).get("admins_id", [])
+        if (user_id == sender_id and event.is_admin()) or user_id in map(str, admins):
+            return "拉黑失败：目标用户是 AstrBot 管理员。"
 
         try:
             duration = float(duration_minutes)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return "拉黑失败：duration_minutes 必须是数字。"
-        if not math.isfinite(duration) or duration <= 0:
+        if (
+            isinstance(duration_minutes, bool)
+            or not math.isfinite(duration)
+            or duration <= 0
+        ):
             return "拉黑失败：duration_minutes 必须是大于 0 的有限数字。"
-
-        user_id = self._sender_id(event)
-        if not user_id:
-            return "拉黑失败：无法取得当前消息发送者 ID。"
 
         now = time.time()
         expires_at = now + duration * 60
         if not math.isfinite(expires_at):
             return "拉黑失败：拉黑时长过大。"
+        try:
+            end_time = format_end_time(expires_at)
+        except (OverflowError, OSError, ValueError):
+            return "拉黑失败：拉黑时长超出日期支持范围。"
 
         conversation_id = event.unified_msg_origin
         entry = BlacklistEntry(
             user_id=user_id,
-            user_name=self._sender_name(event, user_id),
+            user_name=self._sender_name(event, user_id)
+            if user_id == sender_id
+            else user_id,
             expires_at=expires_at,
         )
         async with self._state_lock:
             await self._ensure_state_loaded()
-            self._state.remove_expired(now)
-            self._state.add(conversation_id, entry)
-            await self._save_state()
+            state = self._state.copy()
+            state.remove_expired(now)
+            state.add(conversation_id, entry)
+            await self._save_state(state)
 
         remaining = format_remaining(expires_at - now)
         logger.info(
@@ -190,8 +242,8 @@ class LLMBlacklistPlugin(Star):
             remaining,
         )
         return (
-            f"已将当前用户 {entry.user_name}（{user_id}）在当前对话拉黑 {remaining}，"
-            f"解禁时间 {format_end_time(expires_at)}。"
+            f"已将用户 {entry.user_name}（{user_id}）在当前对话拉黑 {remaining}，"
+            f"解禁时间 {end_time}。"
         )
 
     @filter.command("拉黑")
@@ -201,21 +253,20 @@ class LLMBlacklistPlugin(Star):
         now = time.time()
         async with self._state_lock:
             await self._ensure_state_loaded()
-            changed = self._state.remove_expired(now)
-            entries = self._state.entries_for(event.unified_msg_origin, now)
+            state = self._state.copy()
+            changed = state.remove_expired(now)
+            entries = state.entries_for(event.unified_msg_origin, now)
             if changed:
-                await self._save_state()
+                await self._save_state(state)
 
         if not entries:
             yield event.plain_result("当前对话没有仍在生效的临时拉黑记录。")
             return
 
-        lines = [f"当前对话临时黑名单（{len(entries)} 人）"]
-        lines.extend(
-            self._format_entry(index, entry, now)
-            for index, entry in enumerate(entries, start=1)
+        message = self._format_list(
+            f"当前对话临时黑名单（{len(entries)} 人）", {"": entries}, now
         )
-        yield event.plain_result("\n".join(lines))
+        yield event.plain_result(message)
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("全局拉黑")
@@ -225,24 +276,23 @@ class LLMBlacklistPlugin(Star):
         now = time.time()
         async with self._state_lock:
             await self._ensure_state_loaded()
-            changed = self._state.remove_expired(now)
-            conversations = self._state.all_entries(now)
+            state = self._state.copy()
+            changed = state.remove_expired(now)
+            conversations = state.all_entries(now)
             if changed:
-                await self._save_state()
+                await self._save_state(state)
 
         if not conversations:
             yield event.plain_result("全部对话中都没有仍在生效的临时拉黑记录。")
             return
 
         total = sum(len(entries) for entries in conversations.values())
-        lines = [f"全局临时黑名单（{len(conversations)} 个对话，共 {total} 人）"]
-        for conversation_id, entries in conversations.items():
-            lines.append(f"\n[{conversation_id}]")
-            lines.extend(
-                self._format_entry(index, entry, now)
-                for index, entry in enumerate(entries, start=1)
-            )
-        yield event.plain_result("\n".join(lines))
+        message = self._format_list(
+            f"全局临时黑名单（{len(conversations)} 个对话，共 {total} 人）",
+            conversations,
+            now,
+        )
+        yield event.plain_result(message)
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("出狱")
@@ -258,10 +308,11 @@ class LLMBlacklistPlugin(Star):
         conversation_id = event.unified_msg_origin
         async with self._state_lock:
             await self._ensure_state_loaded()
-            changed = self._state.remove_expired(now)
-            entry = self._state.remove(conversation_id, user_id)
+            state = self._state.copy()
+            changed = state.remove_expired(now)
+            entry = state.remove(conversation_id, user_id)
             if changed or entry is not None:
-                await self._save_state()
+                await self._save_state(state)
 
         if entry is None:
             yield event.plain_result(f"用户 {user_id} 当前不在这个对话的临时黑名单中。")

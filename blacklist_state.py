@@ -24,6 +24,14 @@ class BlacklistState:
     def __init__(self) -> None:
         self._conversations: dict[str, dict[str, BlacklistEntry]] = {}
 
+    def copy(self) -> BlacklistState:
+        state = BlacklistState()
+        state._conversations = {
+            conversation_id: users.copy()
+            for conversation_id, users in self._conversations.items()
+        }
+        return state
+
     @classmethod
     def from_dict(cls, raw: Any, now: float) -> BlacklistState:
         state = cls()

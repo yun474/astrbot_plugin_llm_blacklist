@@ -1,7 +1,7 @@
 name: astrbot_plugin_llm_blacklist
 display_name: LLM 会话临时黑名单
-desc: 让 LLM 自主决定拉黑当前用户多久，并按对话查询临时黑名单。
-version: 0.1.1
+desc: 让 LLM 指定用户 openid 并自主决定拉黑多久，按对话查询临时黑名单。
+version: 0.1.2
 author: yun474
 repo: https://github.com/yun474/astrbot_plugin_llm_blacklist
 astrbot_version: ">=4.9.2"
