@@ -10,5 +10,11 @@
     "type": "text",
     "hint": "使用 {remaining_time} 占位符显示实时剩余时间。",
     "default": "你在当前对话中仍处于临时拉黑状态，剩余 {remaining_time}。发送 /拉黑 可查看详情。"
+  },
+  "permanent_blocked_message": {
+    "description": "被永久拉黑用户再次唤醒 LLM 时的提示内容",
+    "type": "text",
+    "hint": "永久拉黑没有剩余时间，不支持 {remaining_time} 占位符；是否发送同样受上方开关控制。",
+    "default": "你已在当前对话中被永久拉黑。"
   }
 }

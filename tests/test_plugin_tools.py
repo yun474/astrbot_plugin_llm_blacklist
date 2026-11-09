@@ -263,6 +263,74 @@ class PluginToolTest(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("拉黑失败", result)
         self.plugin.put_kv_data.assert_not_awaited()
 
+    async def test_permanent_ban_ignores_duration_and_survives_reload(self):
+        result = await self.plugin.add_dialog_temporary_blacklist(
+            self.event, None, "target", True
+        )
+        self.assertIn("永久拉黑", result)
+        saved = self.plugin.put_kv_data.call_args.args[1]
+        self.assertIsNone(saved[self.event.unified_msg_origin]["target"]["expires_at"])
+
+        restored = plugin_module.LLMBlacklistPlugin(self.context, {})
+        restored.get_kv_data = AsyncMock(return_value=saved)
+        restored.put_kv_data = AsyncMock()
+        target = self.make_event("target")
+        target.plain_result.side_effect = lambda message: message
+        with patch.object(plugin_module.time, "time", return_value=10**12):
+            await restored.block_blacklisted_request(target, None)
+        target.stop_event.assert_called_once()
+        target.send.assert_awaited_once_with(
+            plugin_module.DEFAULT_PERMANENT_BLOCKED_MESSAGE
+        )
+
+        self.event.plain_result.side_effect = lambda message: message
+        results = [
+            result async for result in restored.list_dialog_blacklist(self.event)
+        ]
+        self.assertIn("1. target（target）\n   永久拉黑", results[0])
+
+        admin = self.make_event("admin", admin=True)
+        mention = plugin_module.At()
+        mention.qq = "target"
+        admin.get_messages.return_value = [mention]
+        _ = [result async for result in restored.release_user(admin)]
+        target.stop_event.reset_mock()
+        await restored.block_blacklisted_request(target, None)
+        target.stop_event.assert_not_called()
+
+    async def test_permanent_message_uses_its_own_config(self):
+        self.plugin.config = {"permanent_blocked_message": "永久禁言"}
+        await self.plugin.add_dialog_temporary_blacklist(self.event, permanent=True)
+        self.event.plain_result.side_effect = lambda message: message
+        await self.plugin.block_blacklisted_request(self.event, None)
+        self.event.send.assert_awaited_once_with("永久禁言")
+
+    async def test_false_permanent_keeps_temporary_behavior(self):
+        result = await self.plugin.add_dialog_temporary_blacklist(
+            self.event, 30, "target", False
+        )
+        self.assertIn("30分钟", result)
+        saved = self.plugin.put_kv_data.call_args.args[1]
+        self.assertEqual(
+            saved[self.event.unified_msg_origin]["target"]["expires_at"], 1_700_001_800
+        )
+
+    async def test_non_boolean_permanent_is_rejected(self):
+        for permanent in ("true", "false", 1, 0):
+            with self.subTest(permanent=permanent):
+                result = await self.plugin.add_dialog_temporary_blacklist(
+                    self.event, 30, "target", permanent
+                )
+                self.assertIn("拉黑失败", result)
+        self.plugin.put_kv_data.assert_not_awaited()
+
+    async def test_permanent_ban_still_protects_admins(self):
+        result = await self.plugin.add_dialog_temporary_blacklist(
+            self.event, None, "admin", True
+        )
+        self.assertIn("管理员", result)
+        self.plugin.put_kv_data.assert_not_awaited()
+
     async def test_explicit_target_does_not_require_sender_id(self):
         event = self.make_event("")
         event.message_obj.sender.user_id = ""

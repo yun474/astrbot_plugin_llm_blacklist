@@ -14,6 +14,15 @@ class PluginConfigTest(unittest.TestCase):
             schema["blocked_message_template"]["default"],
         )
 
+    def test_permanent_message_default_matches_code(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        schema = json.loads((root / "_conf_schema.json").read_text(encoding="utf-8"))
+        source = (root / "main.py").read_text(encoding="utf-8")
+
+        default = schema["permanent_blocked_message"]["default"]
+        self.assertNotIn("{remaining_time}", default)
+        self.assertIn(f'DEFAULT_PERMANENT_BLOCKED_MESSAGE = "{default}"', source)
+
 
 if __name__ == "__main__":
     unittest.main()

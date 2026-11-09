@@ -11,11 +11,18 @@ OFFICIAL_MENTION_PATTERN = re.compile(r"<@!?([^<>\s]+)>")
 
 @dataclass(frozen=True, slots=True)
 class BlacklistEntry:
-    """一条会话内临时拉黑记录。"""
+    """一条会话内拉黑记录，expires_at 为 None 表示永久拉黑。"""
 
     user_id: str
     user_name: str
-    expires_at: float
+    expires_at: float | None
+
+    @property
+    def permanent(self) -> bool:
+        return self.expires_at is None
+
+    def is_active(self, now: float) -> bool:
+        return self.expires_at is None or self.expires_at > now
 
 
 class BlacklistState:
@@ -44,12 +51,17 @@ class BlacklistState:
             for user_id, payload in users.items():
                 if not isinstance(user_id, str) or not isinstance(payload, dict):
                     continue
-                try:
-                    expires_at = float(payload["expires_at"])
-                except (KeyError, TypeError, ValueError):
+                if "expires_at" not in payload:
                     continue
-                if not math.isfinite(expires_at) or expires_at <= now:
-                    continue
+                expires_at = payload["expires_at"]
+                # 显式存储的 null 表示永久拉黑
+                if expires_at is not None:
+                    try:
+                        expires_at = float(expires_at)
+                    except (TypeError, ValueError):
+                        continue
+                    if not math.isfinite(expires_at) or expires_at <= now:
+                        continue
 
                 user_name = str(payload.get("user_name") or user_id)
                 state.add(
@@ -62,7 +74,7 @@ class BlacklistState:
                 )
         return state
 
-    def to_dict(self) -> dict[str, dict[str, dict[str, str | float]]]:
+    def to_dict(self) -> dict[str, dict[str, dict[str, str | float | None]]]:
         return {
             conversation_id: {
                 user_id: {
@@ -92,7 +104,7 @@ class BlacklistState:
         self, conversation_id: str, user_id: str, now: float
     ) -> BlacklistEntry | None:
         entry = self._conversations.get(conversation_id, {}).get(user_id)
-        if entry and entry.expires_at > now:
+        if entry and entry.is_active(now):
             return entry
         return None
 
@@ -100,9 +112,17 @@ class BlacklistState:
         entries = [
             entry
             for entry in self._conversations.get(conversation_id, {}).values()
-            if entry.expires_at > now
+            if entry.is_active(now)
         ]
-        return sorted(entries, key=lambda entry: (entry.expires_at, entry.user_id))
+        # 临时记录按解禁时间排序，永久记录统一排在最后
+        return sorted(
+            entries,
+            key=lambda entry: (
+                entry.permanent,
+                entry.expires_at or 0.0,
+                entry.user_id,
+            ),
+        )
 
     def all_entries(self, now: float) -> dict[str, list[BlacklistEntry]]:
         return {
@@ -116,7 +136,7 @@ class BlacklistState:
         for conversation_id in list(self._conversations):
             users = self._conversations[conversation_id]
             for user_id in list(users):
-                if users[user_id].expires_at <= now:
+                if not users[user_id].is_active(now):
                     del users[user_id]
                     changed = True
             if not users:

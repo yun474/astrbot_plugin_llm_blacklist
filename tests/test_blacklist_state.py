@@ -86,6 +86,36 @@ class BlacklistStateTest(unittest.TestCase):
 
         self.assertEqual(restored.to_dict(), state.to_dict())
 
+    def test_permanent_records_never_expire_and_round_trip(self) -> None:
+        state = BlacklistState()
+        state.add("dialog", BlacklistEntry("1", "甲", None))
+        state.add("dialog", BlacklistEntry("2", "乙", 200.0))
+
+        far_future = 10**12
+        self.assertTrue(state.remove_expired(far_future))
+        self.assertIsNotNone(state.get("dialog", "1", far_future))
+        self.assertEqual(
+            state.to_dict(), {"dialog": {"1": {"user_name": "甲", "expires_at": None}}}
+        )
+
+        restored = BlacklistState.from_dict(state.to_dict(), now=far_future)
+        self.assertEqual(restored.to_dict(), state.to_dict())
+
+    def test_missing_expiry_is_not_treated_as_permanent(self) -> None:
+        restored = BlacklistState.from_dict({"dialog": {"1": {"user_name": "甲"}}}, 0)
+
+        self.assertEqual(restored.to_dict(), {})
+
+    def test_permanent_entries_are_listed_after_temporary_ones(self) -> None:
+        state = BlacklistState()
+        state.add("dialog", BlacklistEntry("a", "甲", None))
+        state.add("dialog", BlacklistEntry("b", "乙", 500.0))
+        state.add("dialog", BlacklistEntry("c", "丙", 200.0))
+
+        ids = [entry.user_id for entry in state.entries_for("dialog", 100.0)]
+
+        self.assertEqual(ids, ["c", "b", "a"])
+
     def test_remaining_time_is_rounded_up(self) -> None:
         self.assertEqual(format_remaining(0.1), "1秒")
         self.assertEqual(format_remaining(3661), "1小时1分钟1秒")
